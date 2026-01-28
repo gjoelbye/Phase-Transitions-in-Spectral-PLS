@@ -1,0 +1,206 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+wheels/
+*.egg-info
+.eggs/
+*.so
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv
+.venv/
+venv/
+ENV/
+env/
+.conda/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# Jupyter Notebook outputs (optional - uncomment if you don't want to track outputs)
+# *.ipynb
+
+# IPython
+.ipython/
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# IDEs and Editors
+## VSCode
+.vscode/
+*.code-workspace
+
+## PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+## Cursor (AI-powered editor)
+.cursor/
+.cursorrules
+.cursorignore
+
+## Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+## Vim
+*.swp
+*.swo
+*~
+.vim/
+
+## Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# AI Tools and Configs
+## Claude AI
+.claude/
+.claude_cache/
+
+## OpenAI / Anthropic
+.openai/
+.anthropic/
+.openai_cache/
+
+## GitHub Copilot
+.copilot/
+
+## Cursor AI
+.cursor/
+cursor/
+.cursorrules
+.cursorignore
+
+## Other AI tools
+.ai/
+.llm_cache/
+*.ai_cache
+.continue/
+.continueignore
+.aider/
+.aiderignore
+
+# Data files (large, downloaded separately)
+data/xena/
+data/pbmc_multiome_10k/
+!data/.gitkeep
+
+# Results cache
+!results/.gitkeep
+
+# Large files
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# OS files
+## macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+## Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+## Linux
+*~
+.directory
+.Trash-*
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# Project specific
+# Add any project-specific ignores here
+# e.g., if you have specific data directories:
+# data/raw/
+# data/processed/
+
+# LaTeX (if you're compiling)
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+
+# Figures (optional - uncomment if you don't want to track generated figures)
+# figures/*.pdf
+# figures/*.png
+# figures/*.jpg
+
+# Results (optional - uncomment if you don't want to track results)
+# results/*.pkl
+# results/*.csv
+
+# uv lock file (reproducibility)
+# uv.lock
+
+experiments/fig5_real_data_validation.ipynb
+figures/fig5_real_data_validation.pdf
+results/fig5_real_validation_results.pkl
