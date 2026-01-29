@@ -1,6 +1,6 @@
 # Phase Transitions in PLS-SVD with Missing Data
 
-This repository contains code for reproducing the experiments in our ICML 2026 paper on phase transitions in Partial Least Squares Singular Value Decomposition (PLS-SVD) under dual MCAR (Missing Completely At Random) missingness.
+This repository contains code for reproducing the experiments in our paper on phase transitions in Partial Least Squares Singular Value Decomposition (PLS-SVD) under dual MCAR (Missing Completely At Random) missingness.
 
 ## Theory
 
@@ -130,10 +130,9 @@ Data is cached in `data/` and excluded from git.
 ## Citation
 
 ```bibtex
-@inproceedings{anonymous2026icml,
+@article{anonymous2026phase,
   title={Missing-Data-Induced Phase Transitions in Spectral PLS for Multimodal Learning},
   author={Anonymous},
-  booktitle={International Conference on Machine Learning (ICML)},
   year={2026}
 }
 ```
