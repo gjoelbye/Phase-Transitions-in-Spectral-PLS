@@ -21,8 +21,10 @@ from .core import (
 from .methods import (
     pls_svd,
     compute_overlaps,
-    complete_case_analysis,
     mean_imputation_pls,
+    em_pls,
+    iterative_svd_pls,
+    oracle_pls,
 )
 
 from .data import (
@@ -31,6 +33,7 @@ from .data import (
     generate_data,
     generate_data_non_gaussian,
     generate_semi_synthetic,
+    generate_data_mar,
 )
 
 from .runners import (
@@ -48,6 +51,16 @@ from .runners import (
     compute_sigma_ratio,
     split_half_stability,
     bootstrap_direction_variance,
+    # MAR runners
+    run_single_trial_mar,
+    run_multiple_trials_mar,
+    _run_mar_worker,
+    _run_mar_grid_worker,
+    # All-methods comparison runners
+    run_single_trial_all_methods,
+    run_multiple_trials_all_methods,
+    _run_all_methods_worker,
+    _run_all_methods_missingness_worker,
 )
 
 __all__ = [
@@ -59,14 +72,17 @@ __all__ = [
     # Methods
     'pls_svd',
     'compute_overlaps',
-    'complete_case_analysis',
     'mean_imputation_pls',
+    'em_pls',
+    'iterative_svd_pls',
+    'oracle_pls',
     # Data
     'whiten_to_identity',
     'apply_mcar',
     'generate_data',
     'generate_data_non_gaussian',
     'generate_semi_synthetic',
+    'generate_data_mar',
     # Runners
     'run_single_trial',
     'run_multiple_trials',
@@ -82,4 +98,14 @@ __all__ = [
     'compute_sigma_ratio',
     'split_half_stability',
     'bootstrap_direction_variance',
+    # MAR runners
+    'run_single_trial_mar',
+    'run_multiple_trials_mar',
+    '_run_mar_worker',
+    '_run_mar_grid_worker',
+    # All-methods comparison runners
+    'run_single_trial_all_methods',
+    'run_multiple_trials_all_methods',
+    '_run_all_methods_worker',
+    '_run_all_methods_missingness_worker',
 ]

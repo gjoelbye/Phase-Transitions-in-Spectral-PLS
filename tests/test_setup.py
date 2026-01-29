@@ -137,16 +137,11 @@ def test_baselines():
     print("\nTesting baseline methods...")
 
     try:
-        from src import (ModelParams, generate_data, complete_case_analysis,
+        from src import (ModelParams, generate_data,
                                mean_imputation_pls, compute_overlaps)
 
         params = ModelParams(N=100, Dx=30, Dy=25, theta=2.0, mx=0.2, my=0.2)
         X, Y, Sx, Sy = generate_data(params, seed=42)
-
-        # Complete-case
-        u_cc, v_cc = complete_case_analysis(X, Y, Sx, Sy)
-        Rx2_cc, _ = compute_overlaps(u_cc, v_cc, params.u0, params.v0)
-        print(f"  [OK] Complete-case analysis (Rx2={Rx2_cc:.3f})")
 
         # Mean imputation
         u_mi, v_mi = mean_imputation_pls(X, Y, Sx, Sy)

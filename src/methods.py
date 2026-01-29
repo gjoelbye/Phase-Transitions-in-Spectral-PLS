@@ -4,7 +4,6 @@ PLS-SVD estimation methods and baselines.
 This module contains:
 - pls_svd: PLS-SVD with optional pre-whitening
 - compute_overlaps: squared overlap computation
-- complete_case_analysis: baseline using only complete rows
 - mean_imputation_pls: baseline with mean imputation
 """
 
@@ -91,50 +90,6 @@ def compute_overlaps(
     return Rx2, Ry2
 
 
-def complete_case_analysis(
-    X: np.ndarray,
-    Y: np.ndarray,
-    Sx: np.ndarray,
-    Sy: np.ndarray,
-    prewhiten: bool = True
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Complete-case analysis: use only rows with no missing entries.
-
-    Args:
-        X, Y: Data matrices with missing entries as zeros
-        Sx, Sy: Missingness masks
-        prewhiten: If True, rewhiten X_complete before computing cross-cov
-
-    Returns:
-        u_hat: Estimated direction in X
-        v_hat: Estimated direction in Y
-    """
-    # Find complete cases (no missing in either X or Y)
-    complete_rows = (Sx.all(axis=1)) & (Sy.all(axis=1))
-
-    if complete_rows.sum() < 2:
-        # Not enough complete cases
-        Dx, Dy = X.shape[1], Y.shape[1]
-        return np.zeros(Dx), np.zeros(Dy)
-
-    X_complete = X[complete_rows]
-    Y_complete = Y[complete_rows]
-    N_complete = X_complete.shape[0]
-
-    # Optionally prewhiten X_complete
-    if prewhiten:
-        S_xx = (X_complete.T @ X_complete) / N_complete
-        A = inv_sqrtm_psd(S_xx)
-        X_complete = X_complete @ A
-
-    # Cross-covariance SVD
-    C = X_complete.T @ Y_complete / N_complete
-
-    U, S, Vt = np.linalg.svd(C, full_matrices=False)
-    return U[:, 0], Vt[0, :]
-
-
 def mean_imputation_pls(
     X: np.ndarray,
     Y: np.ndarray,
@@ -182,3 +137,199 @@ def mean_imputation_pls(
 
     U, S, Vt = np.linalg.svd(C, full_matrices=False)
     return U[:, 0], Vt[0, :]
+
+
+def em_pls(
+    X: np.ndarray,
+    Y: np.ndarray,
+    Sx: np.ndarray,
+    Sy: np.ndarray,
+    n_iter: int = 50,
+    tol: float = 1e-6,
+    prewhiten: bool = True,
+    eps: float = 1e-10
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """
+    EM algorithm for probabilistic PLS with missing data.
+
+    Iteratively:
+    1. E-step: Impute missing values using current rank-1 estimate
+    2. M-step: Update PLS directions from imputed data
+
+    This is a simplified EM approach that imputes missing entries
+    based on the current rank-1 signal estimate, then re-estimates
+    directions. More sophisticated approaches would integrate over
+    the posterior of missing values.
+
+    Args:
+        X: Design matrix with missing entries as zeros (N x Dx)
+        Y: Response matrix with missing entries as zeros (N x Dy)
+        Sx: Mask for X (1 = observed, 0 = missing)
+        Sy: Mask for Y (1 = observed, 0 = missing)
+        n_iter: Maximum number of EM iterations
+        tol: Convergence tolerance for direction change
+        prewhiten: If True, rewhiten X at each M-step
+        eps: Regularization for inverse square root
+
+    Returns:
+        u_hat: Estimated direction in X (Dx,)
+        v_hat: Estimated direction in Y (Dy,)
+        sigma1: Final top singular value
+    """
+    N, Dx = X.shape
+    _, Dy = Y.shape
+
+    # Initialize with mean imputation
+    X_imp = X.copy().astype(float)
+    Y_imp = Y.copy().astype(float)
+
+    # Mean impute X
+    for j in range(Dx):
+        mask = Sx[:, j].astype(bool)
+        if mask.sum() > 0:
+            col_mean = X[mask, j].mean()
+            X_imp[~mask, j] = col_mean
+
+    # Mean impute Y
+    for j in range(Dy):
+        mask = Sy[:, j].astype(bool)
+        if mask.sum() > 0:
+            col_mean = Y[mask, j].mean()
+            Y_imp[~mask, j] = col_mean
+
+    # Initial PLS estimate
+    u_hat, v_hat, sigma1 = pls_svd(X_imp, Y_imp, prewhiten=prewhiten, eps=eps)
+
+    for iteration in range(n_iter):
+        u_prev = u_hat.copy()
+        v_prev = v_hat.copy()
+
+        # E-step: Impute missing values using current estimate
+        # Model: Y ≈ sigma1 * (X @ u) @ v^T
+        # For missing X_ij: estimate X_ij from Y using the model
+        # For missing Y_ij: estimate Y_ij from X using the model
+
+        # Estimate latent scores
+        # z_i ≈ X_i @ u (latent score for sample i)
+        # For observed entries, use them directly
+        # For imputed, use previous iteration's estimate
+
+        # Compute latent scores from current imputed X
+        z_x = X_imp @ u_hat  # (N,)
+
+        # E-step for Y: Y_ij = sigma1 * z_i * v_j + noise
+        # Missing Y_ij: impute as sigma1 * z_i * v_j
+        Y_signal = sigma1 * np.outer(z_x, v_hat)
+        Y_imp_new = Y.copy().astype(float)
+        Y_imp_new[~Sy.astype(bool)] = Y_signal[~Sy.astype(bool)]
+
+        # E-step for X: More complex, need to estimate z from Y then X from z
+        # Simplified: for missing X_ij, use column mean (keep previous imputation)
+        # This is a simplification; full EM would integrate over z
+        # For now, we only update Y imputation in E-step
+
+        Y_imp = Y_imp_new
+
+        # M-step: Update PLS directions from imputed data
+        u_hat, v_hat, sigma1 = pls_svd(X_imp, Y_imp, prewhiten=prewhiten, eps=eps)
+
+        # Check convergence
+        u_change = 1 - np.abs(u_hat @ u_prev)
+        v_change = 1 - np.abs(v_hat @ v_prev)
+
+        if u_change < tol and v_change < tol:
+            break
+
+    return u_hat, v_hat, sigma1
+
+
+def iterative_svd_pls(
+    X: np.ndarray,
+    Y: np.ndarray,
+    Sx: np.ndarray,
+    Sy: np.ndarray,
+    rank: int = 5,
+    n_iter: int = 20,
+    prewhiten: bool = True,
+    eps: float = 1e-10
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """
+    Low-rank SVD imputation followed by PLS-SVD.
+
+    Uses iterative soft-thresholded SVD to impute missing entries,
+    then runs PLS-SVD on the completed matrices.
+
+    Args:
+        X: Design matrix with missing entries as zeros (N x Dx)
+        Y: Response matrix with missing entries as zeros (N x Dy)
+        Sx: Mask for X (1 = observed, 0 = missing)
+        Sy: Mask for Y (1 = observed, 0 = missing)
+        rank: Rank for low-rank approximation during imputation
+        n_iter: Number of SVD iterations for imputation
+        prewhiten: If True, rewhiten X before computing cross-cov
+        eps: Regularization for inverse square root
+
+    Returns:
+        u_hat: Estimated direction in X (Dx,)
+        v_hat: Estimated direction in Y (Dy,)
+        sigma1: Top singular value
+    """
+    def impute_low_rank(M: np.ndarray, S: np.ndarray, rank: int, n_iter: int) -> np.ndarray:
+        """Impute missing entries using iterative low-rank SVD."""
+        M_imp = M.copy().astype(float)
+
+        # Initialize missing entries with column means
+        for j in range(M.shape[1]):
+            mask = S[:, j].astype(bool)
+            if mask.sum() > 0:
+                col_mean = M[mask, j].mean()
+                M_imp[~mask, j] = col_mean
+            else:
+                M_imp[~mask, j] = 0.0
+
+        for _ in range(n_iter):
+            # Low-rank approximation
+            U, s, Vt = np.linalg.svd(M_imp, full_matrices=False)
+            # Keep top 'rank' components
+            k = min(rank, len(s))
+            M_low_rank = U[:, :k] @ np.diag(s[:k]) @ Vt[:k, :]
+
+            # Update only missing entries
+            M_imp = np.where(S.astype(bool), M, M_low_rank)
+
+        return M_imp
+
+    # Impute X and Y using low-rank SVD
+    X_imp = impute_low_rank(X, Sx, rank, n_iter)
+    Y_imp = impute_low_rank(Y, Sy, rank, n_iter)
+
+    # Run PLS-SVD on imputed data
+    u_hat, v_hat, sigma1 = pls_svd(X_imp, Y_imp, prewhiten=prewhiten, eps=eps)
+
+    return u_hat, v_hat, sigma1
+
+
+def oracle_pls(
+    X_star: np.ndarray,
+    Y_star: np.ndarray,
+    prewhiten: bool = False,
+    eps: float = 1e-10
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """
+    Oracle PLS: uses complete (unmasked) data.
+
+    This serves as an upper bound on performance - the best we could
+    do if there were no missing data.
+
+    Args:
+        X_star: Complete design matrix (N x Dx)
+        Y_star: Complete response matrix (N x Dy)
+        prewhiten: If True, rewhiten X (usually False for oracle since X_star is already whitened)
+        eps: Regularization for inverse square root
+
+    Returns:
+        u_hat: Estimated direction in X (Dx,)
+        v_hat: Estimated direction in Y (Dy,)
+        sigma1: Top singular value
+    """
+    return pls_svd(X_star, Y_star, prewhiten=prewhiten, eps=eps)

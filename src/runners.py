@@ -12,8 +12,11 @@ import numpy as np
 from typing import Optional
 
 from .core import ModelParams, theoretical_overlaps, inv_sqrtm_psd
-from .methods import pls_svd, compute_overlaps, complete_case_analysis, mean_imputation_pls
-from .data import generate_data, generate_data_non_gaussian
+from .methods import (
+    pls_svd, compute_overlaps, mean_imputation_pls,
+    em_pls, iterative_svd_pls, oracle_pls
+)
+from .data import generate_data, generate_data_non_gaussian, generate_data_mar
 
 
 def run_single_trial(params: ModelParams, seed: Optional[int] = None) -> dict:
@@ -38,10 +41,6 @@ def run_single_trial(params: ModelParams, seed: Optional[int] = None) -> dict:
     u_hat_naive, v_hat_naive, sigma1_naive = pls_svd(X, Y, prewhiten=False)
     Rx2_naive, Ry2_naive = compute_overlaps(u_hat_naive, v_hat_naive, params.u0, params.v0)
 
-    # Complete-case analysis
-    u_hat_cc, v_hat_cc = complete_case_analysis(X, Y, Sx, Sy, prewhiten=True)
-    Rx2_cc, Ry2_cc = compute_overlaps(u_hat_cc, v_hat_cc, params.u0, params.v0)
-
     # Mean imputation
     u_hat_mi, v_hat_mi = mean_imputation_pls(X, Y, Sx, Sy, prewhiten=True)
     Rx2_mi, Ry2_mi = compute_overlaps(u_hat_mi, v_hat_mi, params.u0, params.v0)
@@ -54,8 +53,6 @@ def run_single_trial(params: ModelParams, seed: Optional[int] = None) -> dict:
         'Ry2_pls': Ry2_pls,
         'Rx2_naive': Rx2_naive,
         'Ry2_naive': Ry2_naive,
-        'Rx2_cc': Rx2_cc,
-        'Ry2_cc': Ry2_cc,
         'Rx2_mi': Rx2_mi,
         'Ry2_mi': Ry2_mi,
         'Rx2_theory': Rx2_theory,
@@ -522,3 +519,251 @@ def _run_diagnostics_worker(args):
         'stability_y_mean': stab_y_mean,
         'stability_y_std': stab_y_std,
     }
+
+
+# ============================================================
+# MAR (Missing At Random) experiment runners
+# ============================================================
+
+def run_single_trial_mar(
+    params: ModelParams,
+    mar_type: str,
+    mar_strength: float,
+    seed: Optional[int] = None
+) -> dict:
+    """
+    Run a single trial with MAR missingness.
+
+    Args:
+        params: Model parameters (mx, my used as base missingness rates)
+        mar_type: Type of MAR mechanism
+        mar_strength: Strength of MAR effect (0 = MCAR, 1 = strong MAR)
+        seed: Random seed
+
+    Returns:
+        Dictionary with PLS-SVD results and theoretical (MCAR) predictions
+    """
+    X, Y, Sx, Sy = generate_data_mar(params, mar_type=mar_type,
+                                      mar_strength=mar_strength, seed=seed)
+
+    u_hat, v_hat, sigma1 = pls_svd(X, Y, prewhiten=True)
+    Rx2_pls, Ry2_pls = compute_overlaps(u_hat, v_hat, params.u0, params.v0)
+
+    # Theoretical predictions (MCAR theory as baseline)
+    Rx2_theory, Ry2_theory = theoretical_overlaps(params)
+
+    # Compute effective retention (actual fraction observed)
+    rho_x_eff = Sx.mean()
+    rho_y_eff = Sy.mean()
+    rho_eff = rho_x_eff * rho_y_eff
+
+    return {
+        'Rx2_pls': Rx2_pls,
+        'Ry2_pls': Ry2_pls,
+        'Rx2_theory': Rx2_theory,
+        'Ry2_theory': Ry2_theory,
+        'sigma1': sigma1,
+        'theta_crit': params.theta_crit,
+        'rho_x_eff': rho_x_eff,
+        'rho_y_eff': rho_y_eff,
+        'rho_eff': rho_eff,
+    }
+
+
+def run_multiple_trials_mar(
+    params: ModelParams,
+    mar_type: str,
+    mar_strength: float,
+    n_trials: int = 20
+) -> dict:
+    """
+    Run multiple trials with MAR missingness.
+
+    Args:
+        params: Model parameters
+        mar_type: Type of MAR mechanism
+        mar_strength: Strength of MAR effect
+        n_trials: Number of trials
+
+    Returns:
+        Dictionary with mean and std of results
+    """
+    results = []
+    for trial in range(n_trials):
+        result = run_single_trial_mar(params, mar_type, mar_strength, seed=trial)
+        results.append(result)
+
+    aggregated = {}
+    for key in results[0].keys():
+        values = [r[key] for r in results]
+        if isinstance(values[0], (int, float, np.floating)):
+            aggregated[f'{key}_mean'] = np.mean(values)
+            aggregated[f'{key}_std'] = np.std(values)
+
+    aggregated['Rx2_theory'] = results[0]['Rx2_theory']
+    aggregated['Ry2_theory'] = results[0]['Ry2_theory']
+    aggregated['theta_crit'] = results[0]['theta_crit']
+
+    return aggregated
+
+
+def _run_mar_worker(args):
+    """Worker function for MAR experiments."""
+    params_dict, mar_type, mar_strength, n_trials, theta, theta_crit = args
+    params = ModelParams(**params_dict)
+    result = run_multiple_trials_mar(params, mar_type, mar_strength, n_trials=n_trials)
+    result['theta'] = theta
+    result['theta_norm'] = theta / theta_crit
+    result['mar_type'] = mar_type
+    result['mar_strength'] = mar_strength
+    return result
+
+
+def _run_mar_grid_worker(args):
+    """Worker function for MAR 2D grid experiments (theta, mar_strength)."""
+    params_dict, mar_type, mar_strength, n_trials, i, j = args
+    params = ModelParams(**params_dict)
+    result = run_multiple_trials_mar(params, mar_type, mar_strength, n_trials=n_trials)
+    return (i, j, result['Rx2_pls_mean'], result['Rx2_theory'])
+
+
+# ============================================================
+# All-methods comparison runners (for baseline experiments)
+# ============================================================
+
+def run_single_trial_all_methods(
+    params: ModelParams,
+    seed: Optional[int] = None
+) -> dict:
+    """
+    Run a single trial comparing all methods.
+
+    Methods compared:
+    - PLS-SVD (missing-as-zero with prewhitening)
+    - Mean imputation + PLS
+    - EM-PLS
+    - Iterative SVD imputation + PLS
+    - Oracle (no missing data)
+
+    Args:
+        params: Model parameters
+        seed: Random seed
+
+    Returns:
+        Dictionary with results for all methods
+    """
+    import time
+
+    # Generate data (need to store X_star, Y_star for oracle)
+    if seed is not None:
+        np.random.seed(seed)
+
+    # Generate whitened design X_star
+    X_star = np.random.randn(params.N, params.Dx)
+    Q, R = np.linalg.qr(X_star)
+    X_star = Q * np.sqrt(params.N)
+
+    # Generate response Y_star
+    signal = params.theta * np.outer(X_star @ params.u0, params.v0)
+    noise = np.random.randn(params.N, params.Dy)
+    Y_star = signal + noise
+
+    # Generate MCAR masks
+    Sx = np.random.binomial(1, params.rho_x, size=(params.N, params.Dx))
+    Sy = np.random.binomial(1, params.rho_y, size=(params.N, params.Dy))
+
+    # Apply masks
+    X = Sx * X_star
+    Y = Sy * Y_star
+
+    results = {}
+
+    # 1. PLS-SVD (our method)
+    t0 = time.time()
+    u_hat, v_hat, sigma1 = pls_svd(X, Y, prewhiten=True)
+    results['time_pls'] = time.time() - t0
+    results['Rx2_pls'], results['Ry2_pls'] = compute_overlaps(u_hat, v_hat, params.u0, params.v0)
+
+    # 2. Mean imputation
+    t0 = time.time()
+    u_hat_mi, v_hat_mi = mean_imputation_pls(X, Y, Sx, Sy, prewhiten=True)
+    results['time_mean_imp'] = time.time() - t0
+    results['Rx2_mean_imp'], results['Ry2_mean_imp'] = compute_overlaps(u_hat_mi, v_hat_mi, params.u0, params.v0)
+
+    # 3. EM-PLS
+    t0 = time.time()
+    u_hat_em, v_hat_em, _ = em_pls(X, Y, Sx, Sy, n_iter=50, prewhiten=True)
+    results['time_em_pls'] = time.time() - t0
+    results['Rx2_em_pls'], results['Ry2_em_pls'] = compute_overlaps(u_hat_em, v_hat_em, params.u0, params.v0)
+
+    # 4. Iterative SVD imputation
+    t0 = time.time()
+    u_hat_svd, v_hat_svd, _ = iterative_svd_pls(X, Y, Sx, Sy, rank=5, n_iter=20, prewhiten=True)
+    results['time_iter_svd'] = time.time() - t0
+    results['Rx2_iter_svd'], results['Ry2_iter_svd'] = compute_overlaps(u_hat_svd, v_hat_svd, params.u0, params.v0)
+
+    # 5. Oracle (no missing data)
+    t0 = time.time()
+    u_hat_oracle, v_hat_oracle, _ = oracle_pls(X_star, Y_star, prewhiten=False)
+    results['time_oracle'] = time.time() - t0
+    results['Rx2_oracle'], results['Ry2_oracle'] = compute_overlaps(u_hat_oracle, v_hat_oracle, params.u0, params.v0)
+
+    # Theoretical predictions
+    results['Rx2_theory'], results['Ry2_theory'] = theoretical_overlaps(params)
+    results['theta_crit'] = params.theta_crit
+
+    return results
+
+
+def run_multiple_trials_all_methods(
+    params: ModelParams,
+    n_trials: int = 20
+) -> dict:
+    """
+    Run multiple trials comparing all methods.
+
+    Args:
+        params: Model parameters
+        n_trials: Number of trials
+
+    Returns:
+        Dictionary with mean and std of results for all methods
+    """
+    results = []
+    for trial in range(n_trials):
+        result = run_single_trial_all_methods(params, seed=trial)
+        results.append(result)
+
+    aggregated = {}
+    for key in results[0].keys():
+        values = [r[key] for r in results]
+        if isinstance(values[0], (int, float, np.floating)):
+            aggregated[f'{key}_mean'] = np.mean(values)
+            aggregated[f'{key}_std'] = np.std(values)
+
+    # Add non-aggregated values
+    aggregated['Rx2_theory'] = results[0]['Rx2_theory']
+    aggregated['Ry2_theory'] = results[0]['Ry2_theory']
+    aggregated['theta_crit'] = results[0]['theta_crit']
+
+    return aggregated
+
+
+def _run_all_methods_worker(args):
+    """Worker function for all-methods comparison experiments."""
+    params_dict, n_trials, theta, theta_crit = args
+    params = ModelParams(**params_dict)
+    result = run_multiple_trials_all_methods(params, n_trials=n_trials)
+    result['theta'] = theta
+    result['theta_norm'] = theta / theta_crit
+    return result
+
+
+def _run_all_methods_missingness_worker(args):
+    """Worker function for all-methods comparison across missingness rates."""
+    params_dict, n_trials, m = args
+    params = ModelParams(**params_dict)
+    result = run_multiple_trials_all_methods(params, n_trials=n_trials)
+    result['m'] = m
+    result['rho'] = (1 - m) ** 2
+    return result
