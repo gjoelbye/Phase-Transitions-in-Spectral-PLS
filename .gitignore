@@ -204,3 +204,6 @@ logs/
 experiments/fig5_real_data_validation.ipynb
 figures/fig5_real_data_validation.pdf
 results/fig5_real_validation_results.pkl
+*.txt
+*.pkl
+paper*
