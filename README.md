@@ -1,4 +1,4 @@
-# Phase Transitions in Spectral PLS with Missing Data
+# Missing-Data-Induced Phase Transitions\\in Spectral Partial Least Squares
 
 Code for the nine figures and Table 2 of the paper. It covers zero-filled PLS-SVD
 under independent entry-wise missingness in both views.
