@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.venv/
+.ipynb_checkpoints/
+.mypy_cache/
+.vscode/
+.idea/
+
+# Raw biological inputs, downloaded separately (see README).
+data/*
+!data/.gitkeep
+
+.DS_Store
+._*
+*.log
+*.tmp
+*.zip
