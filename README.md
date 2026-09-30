@@ -1,31 +1,57 @@
 # Missing-Data-Induced Phase Transitions in Spectral Partial Least Squares
 
-Code for the nine figures and Table 2 of the paper. It covers zero-filled PLS-SVD
-under independent entry-wise missingness in both views.
+Anders Gjølbye, Emma Kargaard, Ida Kargaard, Lina Skerath, Hiba Nassar and Lars Kai Hansen\
+Technical University of Denmark
+
+**Paper:** [arXiv:2601.21294](https://arxiv.org/abs/2601.21294)
+
+This repository has the code for every figure in the paper, along with the saved
+simulation results. We study spectral partial least squares (PLS-SVD) when entries
+of both views are missing completely at random and filled in with zeros.
+
+## The model
+
+The complete design $X_\star \in \mathbb{R}^{N \times D_x}$ is whitened, and the
+complete response is a rank-one signal plus Gaussian noise,
+
+```math
+X_\star^\top X_\star = N I_{D_x},
+\qquad
+Y_\star = \theta \, (X_\star u_0) \, v_0^\top + Z,
+\qquad
+Z_{ij} \sim \mathcal{N}(0, 1).
+```
+
+Each entry of $X_\star$ is kept with probability $\rho_x$ and each entry of
+$Y_\star$ with probability $\rho_y$, independently. Missing entries are set to
+zero, so we observe $X = S_x \odot X_\star$ and $Y = S_y \odot Y_\star$ for binary
+masks $S_x$ and $S_y$. PLS-SVD takes the leading singular vectors
+$(\hat u, \hat v)$ of $X^\top Y$ as estimates of $u_0$ and $v_0$, and we measure
+recovery by the squared overlaps
+
+```math
+R_x^2 = \langle \hat u, u_0 \rangle^2,
+\qquad
+R_y^2 = \langle \hat v, v_0 \rangle^2.
+```
+
+The estimator is `pls_svd` in `src/methods.py`, and the theoretical curves are
+computed in `src/theory.py`.
 
 ## Installation
 
-The code was run with Python 3.14.
+We used Python 3.14.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Model
+## Reproducing the figures
 
-The complete design is whitened, `X_star.T @ X_star = N I`, and the response is
-`Y_star = theta (X_star u0) v0.T + Z` with standard Gaussian noise `Z`. The
-observed views are `X = S_x * X_star` and `Y = S_y * Y_star`, where the masks
-`S_x`, `S_y` keep each entry independently with probability `rho_x`, `rho_y`.
-The estimator of Eq. (3) is the leading singular pair of `X.T @ Y`, computed by
-`src.methods.pls_svd`. The theoretical predictions are in `src/theory.py`.
-
-## Figures
-
-Each figure has a script and a notebook. The script `scripts/<name>.py` runs the
-simulations and saves `results/<name>.pkl`. The notebook loads that file, draws
-the figure, writes it to `figures/` and prints the numbers quoted in the paper.
-The results of all simulations are included, so the notebooks run in seconds.
+Every figure has a simulation script in `scripts/` and a notebook in `notebooks/`.
+The script saves its results to `results/`. The notebook loads them, draws the
+figure into `figures/` and prints the numbers we quote in the paper. Since all
+the results are already in the repository, the notebooks run in a few seconds.
 
 | Figure | Script | Notebook |
 |---|---|---|
@@ -39,21 +65,24 @@ The results of all simulations are included, so the notebooks run in seconds.
 | 8 | `direction_specific_ceilings.py` | `fig8_direction_specific_ceilings.ipynb` |
 | 9 | `aspect_ratio_sensitivity.py` | `fig9_aspect_ratio_sensitivity.ipynb` |
 
-The Figure 8 notebook also displays Table 2.
+Table 2 is printed by the Figure 8 notebook.
 
-To rerun a simulation, run its script as a module from the repository root,
-for example with 8 worker processes:
+To rerun a simulation, run its script as a module from the repository root. For
+example, with 8 worker processes:
 
 ```bash
 python -m scripts.direction_geometry --workers 8
 ```
 
-The parameters are in the `PARAMS` dictionary at the top of each script. Every
-trial has its own seed, so the results do not depend on the number of workers.
+The parameters are in the `PARAMS` dictionary at the top of each script. Each
+trial has its own seed, so the results are the same for any number of workers.
+Some of the simulations take several hours.
 
 ## Biological data
 
-Figure 8 and Table 2 use two public datasets. The simulation script expects them at:
+Figure 8 and Table 2 use two public datasets that are not included here. You
+only need them to rerun the simulation, not to run the notebook. The script
+looks for the files at
 
 ```text
 data/xena/HiSeqV2.gz
@@ -61,23 +90,26 @@ data/xena/HumanMethylation450.gz
 data/pbmc_multiome_10k/pbmc_granulocyte_sorted_10k_filtered_feature_bc_matrix.h5
 ```
 
-The first two files are the TCGA BRCA gene expression (RNA-seq) and DNA
-methylation (450k) matrices from the UCSC Xena TCGA hub. The third is the 10x
-Genomics PBMC multiome dataset (granulocyte-sorted, 10k cells). The notebook
-needs only the included results.
+The first two are the TCGA BRCA gene expression (RNA-seq) and DNA methylation
+(450k) matrices from the UCSC Xena TCGA hub. The third is the 10x Genomics PBMC
+multiome dataset (granulocyte-sorted, 10k cells).
 
-## Layout
+## Citation
 
-```text
-scripts/        one simulation script per figure
-notebooks/      one notebook per figure
-src/            theory, estimators, data generation, threshold statistics,
-                parallel runs and result files, plotting style
-results/        simulation results
-figures/        figure PDFs
-data/           biological inputs, not included
+If you use this code, please cite the paper.
+
+```bibtex
+@misc{gjolbye2026missing,
+  title         = {Missing-Data-Induced Phase Transitions in Spectral Partial Least Squares},
+  author        = {Gj{\o}lbye, Anders and Kargaard, Emma and Kargaard, Ida and Skerath, Lina and Nassar, Hiba and Hansen, Lars Kai},
+  year          = {2026},
+  eprint        = {2601.21294},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  url           = {https://arxiv.org/abs/2601.21294}
+}
 ```
 
 ## License
 
-MIT License. See `LICENSE`.
+MIT. See `LICENSE`.
