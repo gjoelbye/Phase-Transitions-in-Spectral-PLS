@@ -1,146 +1,83 @@
-# Phase Transitions in PLS-SVD with Missing Data
+# Missing-Data-Induced Phase Transitions in Spectral Partial Least Squares
 
-This repository contains code for reproducing the experiments in our paper on phase transitions in Partial Least Squares Singular Value Decomposition (PLS-SVD) under dual MCAR (Missing Completely At Random) missingness.
-
-## Theory
-
-We study PLS-SVD in a spiked two-view model with dual MCAR missingness. Consider whitened design $X_\star \in \mathbb{R}^{N \times D_x}$ satisfying $X_\star^\top X_\star = N I_{D_x}$, and response
-
-$$Y_\star = \theta (X_\star u_0) v_0^\top + Z, \quad Z_{ij} \overset{\text{iid}}{\sim} \mathcal{N}(0,1)$$
-
-where $u_0, v_0$ are unit signal directions and $\theta \geq 0$ is the signal strength. We observe masked versions $X = S_x \odot X_\star$ and $Y = S_y \odot Y_\star$ with independent MCAR masks having retention probabilities $\rho_x = 1 - m_x$ and $\rho_y = 1 - m_y$.
-
-### Main Result
-
-PLS-SVD computes the leading singular vectors $(\hat{u}, \hat{v})$ of the cross-covariance $\hat{\Sigma}_{XY} = N^{-1} X^\top Y$. Recovery is measured via squared overlaps $R_x^2 = (\hat{u}^\top u_0)^2$ and $R_y^2 = (\hat{v}^\top v_0)^2$.
-
-In the proportional limit with aspect ratios $\alpha_x = N/D_x$ and $\alpha_y = N/D_y$, there exists a sharp phase transition at
-
-$$\theta_{\mathrm{crit}} = \frac{1}{(\alpha_x \alpha_y)^{1/4} \sqrt{\rho}}, \quad \rho = \rho_x \rho_y$$
-
-- **Subcritical** ($\theta < \theta_{\mathrm{crit}}$): No recovery is possible — $R_x^2 = R_y^2 = 0$
-- **Supercritical** ($\theta > \theta_{\mathrm{crit}}$): Recovery succeeds with overlaps
-
-$$R_x^2 = \frac{\alpha_x \alpha_y \rho^2 \theta^4 - 1}{\alpha_y \rho \theta^2 (\alpha_x \rho \theta^2 + 1)}, \quad R_y^2 = \frac{\alpha_x \alpha_y \rho^2 \theta^4 - 1}{\alpha_x \rho \theta^2 (\alpha_y \rho \theta^2 + 1)}$$
-
-Dual missingness acts as signal attenuation: the effective spike strength becomes $\theta_{\mathrm{eff}} = \sqrt{\rho} \, \theta$, increasing the required signal by $1/\sqrt{\rho}$ compared to full observation.
-
-### Whitening Requirement
-
-The theory requires $X_\star^\top X_\star = N I$ after preprocessing. Since MCAR masking destroys whitening, we must **rewhiten after masking**:
-
-1. Apply MCAR masks: $X_{\mathrm{obs}} = S_x \odot X_\star$
-2. Rewhiten: $X_w = X_{\mathrm{obs}} (X_{\mathrm{obs}}^\top X_{\mathrm{obs}} / N)^{-1/2}$
-3. Compute cross-covariance and SVD on $(X_w, Y_{\mathrm{obs}})$
-
-For real data, use `whiten_to_identity()` after dimensionality reduction.
+Code for the nine figures and Table 2 of the paper. It covers zero-filled PLS-SVD
+under independent entry-wise missingness in both views.
 
 ## Installation
 
-```bash
-# Using uv (recommended)
-uv pip install -e .
+The code was run with Python 3.14.
 
-# Or using pip
+```bash
 pip install -r requirements.txt
 ```
 
-## Quick Start
+## Model
 
-```python
-from src import ModelParams, run_multiple_trials, theoretical_overlaps
+The complete design is whitened, `X_star.T @ X_star = N I`, and the response is
+`Y_star = theta (X_star u0) v0.T + Z` with standard Gaussian noise `Z`. The
+observed views are `X = S_x * X_star` and `Y = S_y * Y_star`, where the masks
+`S_x`, `S_y` keep each entry independently with probability `rho_x`, `rho_y`.
+The estimator of Eq. (3) is the leading singular pair of `X.T @ Y`, computed by
+`src.methods.pls_svd`. The theoretical predictions are in `src/theory.py`.
 
-# Define model parameters
-params = ModelParams(
-    N=500,      # Sample size
-    Dx=200,     # Dimension of X
-    Dy=150,     # Dimension of Y
-    theta=2.0,  # Signal strength
-    mx=0.3,     # 30% missing in X
-    my=0.3      # 30% missing in Y
-)
+## Figures
 
-# Check critical threshold
-print(f"theta_crit = {params.theta_crit:.3f}")
-print(f"Is supercritical: {params.is_supercritical}")
+Each figure has a script and a notebook. The script `scripts/<name>.py` runs the
+simulations and saves `results/<name>.pkl`. The notebook loads that file, draws
+the figure, writes it to `figures/` and prints the numbers quoted in the paper.
+The results of all simulations are included, so the notebooks run in seconds.
 
-# Run experiments
-results = run_multiple_trials(params, n_trials=20)
+| Figure | Script | Notebook |
+|---|---|---|
+| 1 | `phase_transition_validation.py` | `fig1_phase_transition_validation.ipynb` |
+| 2 | `direction_geometry.py` | `fig2_direction_geometry.ipynb` |
+| 3 | `retention_phase_diagram.py` | `fig3_retention_phase_diagram.ipynb` |
+| 4 | `noise_distribution_robustness.py` | `fig4_noise_distribution_robustness.ipynb` |
+| 5 | `estimator_comparison.py` | `fig5_estimator_comparison.ipynb` |
+| 6 | `correlated_noise.py` | `fig6_correlated_noise.ipynb` |
+| 7 | `below_isotropic_threshold.py` | `fig7_below_isotropic_threshold.ipynb` |
+| 8 | `direction_specific_ceilings.py` | `fig8_direction_specific_ceilings.ipynb` |
+| 9 | `aspect_ratio_sensitivity.py` | `fig9_aspect_ratio_sensitivity.ipynb` |
 
-# Compare theory vs empirical
-print(f"Rx^2: Theory = {results['Rx2_theory']:.3f}, "
-      f"Empirical = {results['Rx2_pls_mean']:.3f}")
-```
+The Figure 8 notebook also displays Table 2.
 
-## Reproducing Paper Figures
+To rerun a simulation, run its script as a module from the repository root,
+for example with 8 worker processes:
 
-| Figure | Notebook | Description |
-|--------|----------|-------------|
-| Figure 1 | `experiments/fig1_phase_transition_validation.ipynb` | Phase transition curves (theory vs empirical) |
-| Figure 2 | `experiments/fig2_missingness_effects.ipynb` | X-only vs joint missingness comparison |
-| Figure 3 | `experiments/fig3_biological_validation.ipynb` | Semi-synthetic validation on TCGA and PBMC |
-| Figure 4 | `experiments/fig4_split_half_diagnostics.ipynb` | Split-half stability diagnostics |
-| Figure A1 | `experiments/figA1_robustness_analysis.ipynb` | Robustness to non-Gaussian noise |
-
-Run notebooks with:
 ```bash
-cd experiments
-jupyter notebook
+python -m scripts.direction_geometry --workers 8
 ```
 
-## Repository Structure
+The parameters are in the `PARAMS` dictionary at the top of each script. Every
+trial has its own seed, so the results do not depend on the number of workers.
 
-```
-PhaseTransition/
-|-- src/                          # Python package
-|   |-- __init__.py               # Package exports
-|   |-- core.py                   # ModelParams, theoretical_overlaps
-|   |-- methods.py                # pls_svd, compute_overlaps, baselines
-|   |-- data.py                   # Data generation utilities
-|   |-- runners.py                # Experiment runners and diagnostics
-|-- experiments/                  # Jupyter notebooks
-|   |-- fig1_*.ipynb              # Phase transition validation
-|   |-- fig2_*.ipynb              # Missingness effects
-|   |-- fig3_*.ipynb              # Biological validation
-|   |-- fig4_*.ipynb              # Split-half diagnostics
-|   |-- figA1_*.ipynb             # Robustness analysis
-|-- tests/
-|   |-- test_setup.py             # Setup verification
-|   |-- test_computations.py      # Computation tests
-|   |-- test_predictions.py       # Theory prediction tests
-|   |-- test_theory_computations.py
-|-- figures/                      # Generated figures (PDF)
-|-- results/                      # Experiment results cache
-|-- data/                         # Downloaded datasets
-|-- Latex/                        # Paper source (not included)
-|-- pyproject.toml
-|-- requirements.txt
-|-- LICENSE
+## Biological data
+
+Figure 8 and Table 2 use two public datasets. The simulation script expects them at:
+
+```text
+data/xena/HiSeqV2.gz
+data/xena/HumanMethylation450.gz
+data/pbmc_multiome_10k/pbmc_granulocyte_sorted_10k_filtered_feature_bc_matrix.h5
 ```
 
-## Data
+The first two files are the TCGA BRCA gene expression (RNA-seq) and DNA
+methylation (450k) matrices from the UCSC Xena TCGA hub. The third is the 10x
+Genomics PBMC multiome dataset (granulocyte-sorted, 10k cells). The notebook
+needs only the included results.
 
-The notebooks download data automatically when needed:
+## Layout
 
-- **TCGA BRCA**: Gene expression and copy number data from UCSC Xena
-- **PBMC Multiome 10k**: Single-cell RNA and ATAC from 10x Genomics
-
-Data is cached in `data/` and excluded from git.
-
-## Citation
-
-```bibtex
-@article{anonymous2026phase,
-  title={Missing-Data-Induced Phase Transitions in Spectral PLS for Multimodal Learning},
-  author={Anonymous},
-  year={2026}
-}
+```text
+scripts/        one simulation script per figure
+notebooks/      one notebook per figure
+src/            theory, estimators, data generation, threshold statistics,
+                parallel runs and result files, plotting style
+results/        simulation results
+figures/        figure PDFs
+data/           biological inputs, not included
 ```
-
-## Acknowledgments
-
-Acknowledgments withheld for anonymous review.
 
 ## License
 
-MIT License - see LICENSE file.
+MIT License. See `LICENSE`.

@@ -1,399 +1,255 @@
-"""
-Data generation utilities.
+"""Synthetic designs, masked samples and biological data loaders."""
 
-This module contains:
-- whiten_to_identity: eigen-whiten real data
-- apply_mcar: apply MCAR missingness to existing data
-- generate_data: generate synthetic data with MCAR missingness
-- generate_data_non_gaussian: data with non-Gaussian noise
-- generate_semi_synthetic: semi-synthetic data using real X
-"""
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
-from typing import Tuple, Optional
+from scipy.linalg import hadamard
 
-from .core import ModelParams
+from .methods import inv_sqrtm_psd, pls_svd
 
 
-def whiten_to_identity(X: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+@dataclass
+class ModelParams:
+    """Dimensions, signal strength, missingness rates and planted directions."""
+    N: int
+    Dx: int
+    Dy: int
+    theta: float
+    mx: float
+    my: float
+    u0: np.ndarray
+    v0: np.ndarray
+
+    @property
+    def alpha_x(self):
+        return self.N / self.Dx
+
+    @property
+    def alpha_y(self):
+        return self.N / self.Dy
+
+    @property
+    def rho_x(self):
+        return 1 - self.mx
+
+    @property
+    def rho_y(self):
+        return 1 - self.my
+
+
+@lru_cache(maxsize=4)
+def _hadamard_base(N: int) -> np.ndarray:
+    """Walsh-Hadamard matrix of order N, cached across trials."""
+    return hadamard(N).astype(float)
+
+
+def generate_flat_orthogonal(N: int, Dx: int, rng: np.random.Generator) -> np.ndarray:
+    """Randomized Walsh-Hadamard design with entries +-1 and ``X.T @ X = N I``.
+
+    Rows and columns of the order-N Hadamard matrix are permuted, Dx columns
+    are kept and rows and columns get random signs. N must be a power of two.
     """
-    Mean-center and eigen-whiten so that (1/N) X^T X ~ I.
+    H = _hadamard_base(N)
+    H = H[rng.permutation(N), :][:, rng.permutation(N)[:Dx]]
+    H *= rng.choice([-1.0, 1.0], size=(N, 1))
+    H *= rng.choice([-1.0, 1.0], size=(1, Dx))
+    return H
 
-    This is needed when working with real data (e.g., after PCA/LSI reduction)
-    to satisfy the theoretical assumption X_star^T X_star = N I.
 
-    Args:
-        X: Data matrix (N x D)
-        eps: Small constant for numerical stability
+def planted_directions(Dx: int, Dy: int, rng: np.random.Generator):
+    """Random unit vectors u0 in R^Dx and v0 in R^Dy."""
+    u0 = rng.normal(size=Dx)
+    v0 = rng.normal(size=Dy)
+    return u0 / np.linalg.norm(u0), v0 / np.linalg.norm(v0)
 
-    Returns:
-        X_whitened: Whitened matrix (N x D) where (1/N) X_whitened^T X_whitened ~ I
-    """
-    # Center
+
+def whiten_to_identity(X: np.ndarray) -> np.ndarray:
+    """Mean-center and whiten ``X`` so that ``X.T @ X / N`` is identity."""
     X_centered = X - X.mean(axis=0, keepdims=True)
     N = X_centered.shape[0]
-
-    # Compute empirical covariance
     cov = (X_centered.T @ X_centered) / N
-
-    # Eigendecomposition
     w, V = np.linalg.eigh(cov)
-    w = np.maximum(w, eps)  # Avoid division by tiny eigenvalues
-
-    # Whiten: X_whitened = X_centered @ V @ diag(1/sqrt(w))
-    X_whitened = (X_centered @ V) / np.sqrt(w)
-
-    return X_whitened
+    w = np.maximum(w, 1e-12)
+    return (X_centered @ V) / np.sqrt(w)
 
 
-def apply_mcar(
-    X: np.ndarray,
-    Y: np.ndarray,
-    mx: float,
-    my: Optional[float] = None,
-    seed: int = 0
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def generate_data(params: ModelParams, seed: int):
+    """One masked sample (X, Y, Sx, Sy) from the spiked two-view model.
+
+    The complete design is a Haar-random orthogonal matrix scaled to
+    ``X_star.T @ X_star = N I``, and ``Y_star = theta X_star u0 v0.T + Z``.
     """
-    Apply MCAR (Missing Completely At Random) missingness to existing data.
-
-    This is useful for real data experiments where we want to simulate missingness
-    on already preprocessed/whitened data.
-
-    Args:
-        X: Data matrix X (N x Dx)
-        Y: Data matrix Y (N x Dy)
-        mx: Missingness rate for X (fraction of entries to mask)
-        my: Missingness rate for Y (if None, uses mx for symmetric missingness)
-        seed: Random seed for reproducibility
-
-    Returns:
-        X_obs: X with missing entries set to zero (N x Dx)
-        Y_obs: Y with missing entries set to zero (N x Dy)
-        Sx: Mask for X (1 = observed, 0 = missing)
-        Sy: Mask for Y (1 = observed, 0 = missing)
-    """
-    if my is None:
-        my = mx
-
-    rng = np.random.default_rng(seed)
-
-    # Generate MCAR masks
-    Sx = rng.binomial(1, 1 - mx, size=X.shape)
-    Sy = rng.binomial(1, 1 - my, size=Y.shape)
-
-    # Apply masks (missing-as-zero)
-    X_obs = X * Sx
-    Y_obs = Y * Sy
-
-    return X_obs, Y_obs, Sx, Sy
-
-
-def generate_data(
-    params: ModelParams,
-    seed: Optional[int] = None
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Generate data under the spiked two-view model with MCAR missingness.
-
-    Model:
-        X_star^T X_star = N I_Dx  (whitened design)
-        Y_star = theta (X_star u0) v0^T + Z,  Z_ij ~ N(0,1)
-        X = S_x * X_star,  Y = S_y * Y_star  (missing-as-zero)
-
-    Args:
-        params: Model parameters
-        seed: Random seed for reproducibility
-
-    Returns:
-        X: Observed design matrix (N x Dx) with zeros for missing entries
-        Y: Observed response matrix (N x Dy) with zeros for missing entries
-        Sx: Mask for X (1 = observed, 0 = missing)
-        Sy: Mask for Y (1 = observed, 0 = missing)
-    """
-    if seed is not None:
-        np.random.seed(seed)
-
-    # Generate whitened design X_star such that X_star^T X_star = N I_Dx
-    # Method: Generate random matrix, QR decompose, scale by sqrt(N)
+    np.random.seed(seed)
     X_star = np.random.randn(params.N, params.Dx)
-    Q, R = np.linalg.qr(X_star)
+    Q, _ = np.linalg.qr(X_star)
     X_star = Q * np.sqrt(params.N)
-
-    # Generate response Y_star = theta (X_star u0) v0^T + Z
     signal = params.theta * np.outer(X_star @ params.u0, params.v0)
     noise = np.random.randn(params.N, params.Dy)
     Y_star = signal + noise
-
-    # Generate MCAR masks
     Sx = np.random.binomial(1, params.rho_x, size=(params.N, params.Dx))
     Sy = np.random.binomial(1, params.rho_y, size=(params.N, params.Dy))
-
-    # Apply masks (missing-as-zero)
     X = Sx * X_star
     Y = Sy * Y_star
-
     return X, Y, Sx, Sy
 
 
-def generate_data_non_gaussian(
-    params: ModelParams,
-    noise_type: str = 'gaussian',
-    seed: Optional[int] = None
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def masked_trials(params: ModelParams, n_trials: int):
+    """Squared left overlap and top singular value of PLS-SVD over seeded trials.
+
+    Trial t draws its sample with ``generate_data(params, seed=t)``.
     """
-    Generate data under the spiked two-view model with non-Gaussian noise.
+    rx2 = np.empty(n_trials)
+    sigma1 = np.empty(n_trials)
+    for trial in range(n_trials):
+        X, Y, _, _ = generate_data(params, seed=trial)
+        u_hat, _, s1 = pls_svd(X, Y)
+        rx2[trial] = float(u_hat @ params.u0) ** 2
+        sigma1[trial] = s1
+    return rx2, sigma1
 
-    Supports various noise distributions for robustness experiments.
 
-    Args:
-        params: Model parameters
-        noise_type: One of 'gaussian', 't5', 't4.5', 't3', 'laplace', 'heteroskedastic'
-        seed: Random seed for reproducibility
+def generate_data_non_gaussian(params: ModelParams, noise_type: str, seed: int):
+    """As ``generate_data``, with unit-variance noise from the named law."""
+    np.random.seed(seed)
 
-    Returns:
-        X: Observed design matrix (N x Dx) with zeros for missing entries
-        Y: Observed response matrix (N x Dy) with zeros for missing entries
-        Sx: Mask for X (1 = observed, 0 = missing)
-        Sy: Mask for Y (1 = observed, 0 = missing)
-    """
-    if seed is not None:
-        np.random.seed(seed)
-
-    # Generate whitened design X_star such that X_star^T X_star = N I_Dx
     X_star = np.random.randn(params.N, params.Dx)
-    Q, R = np.linalg.qr(X_star)
+    Q, _ = np.linalg.qr(X_star)
     X_star = Q * np.sqrt(params.N)
 
-    # Generate noise based on type
     if noise_type == 'gaussian':
         noise = np.random.randn(params.N, params.Dy)
     elif noise_type == 't5':
-        # Student-t with df=5, scaled to unit variance
         raw = np.random.standard_t(df=5, size=(params.N, params.Dy))
         noise = raw / np.sqrt(5 / 3)
     elif noise_type == 't4.5':
         raw = np.random.standard_t(df=4.5, size=(params.N, params.Dy))
         noise = raw / np.sqrt(4.5 / 2.5)
     elif noise_type == 't3':
-        # Student-t with df=3, scaled to unit variance
         raw = np.random.standard_t(df=3, size=(params.N, params.Dy))
         noise = raw / np.sqrt(3)
     elif noise_type == 'laplace':
-        # Laplace with unit variance: scale = 1/sqrt(2)
         noise = np.random.laplace(loc=0, scale=1/np.sqrt(2), size=(params.N, params.Dy))
     elif noise_type == 'heteroskedastic':
-        # Gaussian with random variance per entry
-        sigmas = np.random.uniform(0.5, 1.5, size=(params.N, params.Dy))
-        noise = np.random.randn(params.N, params.Dy) * sigmas
-    else:
-        raise ValueError(f"Unknown noise_type: {noise_type}")
+        # Shared column variances give unit marginal variance and excess kurtosis 0.25.
+        column_variances = np.random.uniform(0.5, 1.5, size=params.Dy)
+        noise = np.random.randn(params.N, params.Dy) * np.sqrt(column_variances)[None, :]
 
-    # Generate response Y_star = theta (X_star u0) v0^T + noise
     signal = params.theta * np.outer(X_star @ params.u0, params.v0)
     Y_star = signal + noise
-
-    # Generate MCAR masks
     Sx = np.random.binomial(1, params.rho_x, size=(params.N, params.Dx))
     Sy = np.random.binomial(1, params.rho_y, size=(params.N, params.Dy))
-
-    # Apply masks (missing-as-zero)
     X = Sx * X_star
     Y = Sy * Y_star
-
     return X, Y, Sx, Sy
 
 
-def generate_semi_synthetic(
-    X_real: np.ndarray,
-    u0: np.ndarray,
-    v0: np.ndarray,
-    theta: float,
-    mx: float,
-    my: float,
-    Dy: int,
-    seed: Optional[int] = None
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def generate_heterogeneous_whitened(N: int, Dx: int, row_scales, seed: int) -> np.ndarray:
+    """Whitened design with heterogeneous row norms.
+
+    ``row_scales`` sets the row scales before whitening. Whitening attenuates
+    their contrast, so the realized spread is measured from the returned matrix.
     """
-    Generate semi-synthetic data using real X and biological signal directions.
+    row_scales = np.asarray(row_scales, dtype=float)
+    row_scales = row_scales / np.sqrt(np.mean(row_scales ** 2))
 
-    Uses real whitened X data but generates synthetic Y with controlled
-    signal strength and Gaussian noise.
+    rng = np.random.default_rng(seed)
+    G = row_scales[:, None] * rng.standard_normal((N, Dx))
+    W = inv_sqrtm_psd(G.T @ G / N, eps=1e-12)
+    return G @ W
 
-    Args:
-        X_real: Whitened real data matrix (N x Dx), should satisfy X^T X ~ N I
-        u0: Signal direction in X space (Dx,), unit norm
-        v0: Signal direction in Y space (Dy,), unit norm
-        theta: Signal strength
-        mx: Missingness rate in X
-        my: Missingness rate in Y
-        Dy: Dimension of Y (can differ from len(v0) for padding)
-        seed: Random seed
 
-    Returns:
-        X: Observed X with MCAR missingness (N x Dx)
-        Y: Observed Y with MCAR missingness (N x Dy)
-        Sx: Mask for X
-        Sy: Mask for Y
+def leverage_coupled_direction(X_star: np.ndarray, weight: float, seed: int) -> np.ndarray:
+    """Unit direction with controlled score-leverage coupling.
+
+    A weight in [-1, 1] interpolates from a random direction toward the leading
+    (weight > 0) or trailing (weight < 0) eigenvector of the leverage-weighted
+    Gram matrix.
     """
-    if seed is not None:
-        np.random.seed(seed)
+    N = X_star.shape[0]
+    r = np.sum(X_star ** 2, axis=1)
+    M = X_star.T @ (r[:, None] * X_star) / N
+    _, evecs = np.linalg.eigh(M)
+    target = evecs[:, -1] if weight >= 0 else evecs[:, 0]
 
-    N, Dx = X_real.shape
-
-    # Generate Y_star = theta (X_real u0) v0^T + Z
-    latent = X_real @ u0  # (N,)
-    signal = theta * np.outer(latent, v0)  # (N, Dy)
-    noise = np.random.randn(N, Dy)
-    Y_star = signal + noise
-
-    # Generate MCAR masks
-    Sx = np.random.binomial(1, 1 - mx, size=(N, Dx))
-    Sy = np.random.binomial(1, 1 - my, size=(N, Dy))
-
-    # Apply masks
-    X = Sx * X_real
-    Y = Sy * Y_star
-
-    return X, Y, Sx, Sy
+    rng = np.random.default_rng(seed)
+    g = rng.standard_normal(X_star.shape[1])
+    g /= np.linalg.norm(g)
+    u = (1.0 - abs(weight)) * g + abs(weight) * target
+    return u / np.linalg.norm(u)
 
 
-def generate_data_mar(
-    params: ModelParams,
-    mar_type: str = 'signal_dependent',
-    mar_strength: float = 0.5,
-    seed: Optional[int] = None
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+# Biological designs use seeded PCA to fix component order and signs.
+
+def _data_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "data"
+
+
+def load_tcga_whitened(Dx: int = 200, Dy: int = 200, pca_seed: int = 42):
+    """TCGA-BRCA expression against methylation, both whitened to identity.
+
+    Reads the two Xena matrices from ``data/xena``, transposes them to
+    samples x features, keeps the samples present in both, drops feature
+    columns with missing values, standardises, reduces to ``Dx``/``Dy``
+    principal components and whitens.
     """
-    Generate data with MAR (Missing At Random) missingness.
+    import pandas as pd
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
 
-    Unlike MCAR, MAR means missingness probability depends on observed values.
-    This tests robustness of MCAR-derived theory to realistic violations.
+    root = _data_dir() / "xena"
+    expr = pd.read_csv(root / "HiSeqV2.gz", sep="\t", index_col=0,
+                       compression="gzip").T
+    meth = pd.read_csv(root / "HumanMethylation450.gz", sep="\t", index_col=0,
+                       compression="gzip").T
+    common = expr.index.intersection(meth.index)
+    X = expr.loc[common].dropna(axis=1).values.astype(np.float64)
+    Y = meth.loc[common].dropna(axis=1).values.astype(np.float64)
 
-    Args:
-        params: Model parameters (mx, my are used as base missingness rates)
-        mar_type: Type of MAR mechanism:
-            - 'signal_dependent': Miss probability depends on |X @ u0| (signal strength)
-            - 'magnitude_dependent': Miss probability depends on |X_ij| (entry magnitude)
-            - 'thresholded': High probability of missing entries above threshold
-            - 'correlated': Y missingness depends on X values
-        mar_strength: How strongly missingness depends on values (0 = MCAR, 1 = strong MAR)
-        seed: Random seed for reproducibility
+    X = StandardScaler().fit_transform(X)
+    Y = StandardScaler().fit_transform(Y)
+    X = PCA(n_components=Dx, random_state=pca_seed).fit_transform(X)
+    Y = PCA(n_components=Dy, random_state=pca_seed).fit_transform(Y)
+    return whiten_to_identity(X), whiten_to_identity(Y)
 
-    Returns:
-        X: Observed design matrix with MAR missingness
-        Y: Observed response matrix with MAR missingness
-        Sx: Mask for X (1 = observed, 0 = missing)
-        Sy: Mask for Y (1 = observed, 0 = missing)
+
+def load_pbmc_whitened(Dx: int = 200, Dy: int = 200, pca_seed: int = 42):
+    """PBMC multiome RNA against ATAC, both whitened to identity.
+
+    Reads the 10x multiome matrix from ``data/pbmc_multiome_10k``. RNA is
+    filtered, normalized, log-transformed and reduced to 2000 highly variable
+    genes; ATAC is filtered and its first 5000 peaks are kept. 5000 cells
+    present in both are sampled, and each view is standardized, reduced to
+    ``Dx``/``Dy`` principal components and whitened.
     """
-    if seed is not None:
-        np.random.seed(seed)
+    import muon as mu
+    import scanpy as sc
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
 
-    # Generate whitened design X_star
-    X_star = np.random.randn(params.N, params.Dx)
-    Q, R = np.linalg.qr(X_star)
-    X_star = Q * np.sqrt(params.N)
+    path = (_data_dir() / "pbmc_multiome_10k"
+            / "pbmc_granulocyte_sorted_10k_filtered_feature_bc_matrix.h5")
+    mdata = mu.read_10x_h5(str(path))
+    rna, atac = mdata.mod["rna"], mdata.mod["atac"]
 
-    # Generate response Y_star = theta (X_star u0) v0^T + Z
-    signal = params.theta * np.outer(X_star @ params.u0, params.v0)
-    noise = np.random.randn(params.N, params.Dy)
-    Y_star = signal + noise
+    sc.pp.filter_cells(rna, min_genes=200)
+    sc.pp.filter_genes(rna, min_cells=3)
+    sc.pp.normalize_total(rna, target_sum=1e4)
+    sc.pp.log1p(rna)
+    sc.pp.highly_variable_genes(rna, n_top_genes=2000)
+    rna = rna[:, rna.var["highly_variable"]]
 
-    # Compute latent signal for MAR mechanisms
-    latent_x = X_star @ params.u0  # (N,) - latent score per sample
-    latent_y = Y_star @ params.v0  # (N,) - latent score per sample
+    sc.pp.filter_cells(atac, min_genes=200)
+    sc.pp.filter_genes(atac, min_cells=3)
 
-    # Base missingness rates
-    mx_base = params.mx
-    my_base = params.my
+    common = rna.obs_names.intersection(atac.obs_names)
+    selected = np.random.default_rng(42).choice(common, size=5000, replace=False)
+    X = rna[selected].X.toarray()
+    Y = atac[selected].X.toarray()[:, :5000]
 
-    if mar_type == 'signal_dependent':
-        # Missingness probability increases with |latent signal|
-        # P(miss) = mx_base + mar_strength * (|latent| - mean) / (2 * std)
-        # Clipped to [0.01, 0.99]
-        latent_x_norm = (np.abs(latent_x) - np.mean(np.abs(latent_x))) / (np.std(np.abs(latent_x)) + 1e-8)
-        latent_y_norm = (np.abs(latent_y) - np.mean(np.abs(latent_y))) / (np.std(np.abs(latent_y)) + 1e-8)
-
-        # Per-row missingness probabilities
-        px_row = mx_base + mar_strength * 0.3 * latent_x_norm  # (N,)
-        py_row = my_base + mar_strength * 0.3 * latent_y_norm  # (N,)
-
-        px_row = np.clip(px_row, 0.01, 0.99)
-        py_row = np.clip(py_row, 0.01, 0.99)
-
-        # Generate masks with row-varying probabilities
-        Sx = np.zeros((params.N, params.Dx), dtype=int)
-        Sy = np.zeros((params.N, params.Dy), dtype=int)
-        for i in range(params.N):
-            Sx[i] = np.random.binomial(1, 1 - px_row[i], size=params.Dx)
-            Sy[i] = np.random.binomial(1, 1 - py_row[i], size=params.Dy)
-
-    elif mar_type == 'magnitude_dependent':
-        # Missingness probability depends on entry magnitude |X_ij|
-        # Using sigmoid: P(miss) = mx_base + mar_strength * sigmoid(scale * (|X| - median))
-        scale = 2.0  # Controls steepness
-
-        # Normalize magnitudes
-        X_mag = np.abs(X_star)
-        Y_mag = np.abs(Y_star)
-        X_median = np.median(X_mag)
-        Y_median = np.median(Y_mag)
-
-        # Sigmoid transformation
-        def sigmoid(x):
-            return 1 / (1 + np.exp(-x))
-
-        px_entry = mx_base + mar_strength * 0.4 * (sigmoid(scale * (X_mag - X_median)) - 0.5)
-        py_entry = my_base + mar_strength * 0.4 * (sigmoid(scale * (Y_mag - Y_median)) - 0.5)
-
-        px_entry = np.clip(px_entry, 0.01, 0.99)
-        py_entry = np.clip(py_entry, 0.01, 0.99)
-
-        # Generate masks with entry-varying probabilities
-        Sx = (np.random.rand(params.N, params.Dx) > px_entry).astype(int)
-        Sy = (np.random.rand(params.N, params.Dy) > py_entry).astype(int)
-
-    elif mar_type == 'thresholded':
-        # High probability of missing entries with large absolute values
-        # P(miss | |X_ij| > tau) = mx_base + mar_strength * 0.6
-        # P(miss | |X_ij| <= tau) = mx_base
-        tau_x = np.percentile(np.abs(X_star), 75)  # Top 25% magnitude
-        tau_y = np.percentile(np.abs(Y_star), 75)
-
-        px_entry = np.where(np.abs(X_star) > tau_x,
-                           mx_base + mar_strength * 0.5,
-                           mx_base)
-        py_entry = np.where(np.abs(Y_star) > tau_y,
-                           my_base + mar_strength * 0.5,
-                           my_base)
-
-        px_entry = np.clip(px_entry, 0.01, 0.99)
-        py_entry = np.clip(py_entry, 0.01, 0.99)
-
-        Sx = (np.random.rand(params.N, params.Dx) > px_entry).astype(int)
-        Sy = (np.random.rand(params.N, params.Dy) > py_entry).astype(int)
-
-    elif mar_type == 'correlated':
-        # Y missingness depends on X values (cross-view MAR)
-        # P(Y_ij miss) depends on X_i @ u0 (latent X signal for that row)
-        latent_x_norm = (latent_x - np.mean(latent_x)) / (np.std(latent_x) + 1e-8)
-
-        # X uses standard MCAR
-        Sx = np.random.binomial(1, 1 - mx_base, size=(params.N, params.Dx))
-
-        # Y missingness depends on X latent
-        py_row = my_base + mar_strength * 0.3 * np.abs(latent_x_norm)
-        py_row = np.clip(py_row, 0.01, 0.99)
-
-        Sy = np.zeros((params.N, params.Dy), dtype=int)
-        for i in range(params.N):
-            Sy[i] = np.random.binomial(1, 1 - py_row[i], size=params.Dy)
-
-    else:
-        raise ValueError(f"Unknown mar_type: {mar_type}. "
-                        f"Use 'signal_dependent', 'magnitude_dependent', 'thresholded', or 'correlated'.")
-
-    # Apply masks (missing-as-zero)
-    X = Sx * X_star
-    Y = Sy * Y_star
-
-    return X, Y, Sx, Sy
+    X = StandardScaler().fit_transform(X)
+    Y = StandardScaler().fit_transform(Y)
+    X = PCA(n_components=Dx, random_state=pca_seed).fit_transform(X)
+    Y = PCA(n_components=Dy, random_state=pca_seed).fit_transform(Y)
+    return whiten_to_identity(X), whiten_to_identity(Y)
