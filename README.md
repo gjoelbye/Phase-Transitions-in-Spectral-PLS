@@ -99,7 +99,7 @@ multiome dataset (granulocyte-sorted, 10k cells).
 If you use this code, please cite the paper.
 
 ```bibtex
-@misc{gjolbye2026missing,
+@misc{gjolbye2026phase,
   title         = {Missing-Data-Induced Phase Transitions in Spectral Partial Least Squares},
   author        = {Gj{\o}lbye, Anders and Kargaard, Emma and Kargaard, Ida and Skerath, Lina and Nassar, Hiba and Hansen, Lars Kai},
   year          = {2026},
